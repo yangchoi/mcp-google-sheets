@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.log
+
+# Secrets — NEVER commit these
+credentials.json
+token.json
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
