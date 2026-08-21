@@ -166,18 +166,19 @@ Restart Claude Desktop. The Sheets tools will appear in the tool picker.
 
 ### Claude Code
 
-Add to your Claude Code MCP config (typically `~/.claude/settings.json` under `mcpServers`):
+Register the server with the CLI:
 
-```json
-{
-  "mcpServers": {
-    "google-sheets": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-google-sheets/dist/index.js"]
-    }
-  }
-}
+```bash
+claude mcp add --scope user google-sheets -- node /absolute/path/to/mcp-google-sheets/dist/index.js
 ```
+
+`--scope user` makes the server available in **every** project on your machine. Without it the server is added at *local* scope, which loads only in the directory you ran the command from — a common surprise when a scheduled job or a session started elsewhere suddenly has no sheet tools. Check what you got with:
+
+```bash
+claude mcp get google-sheets   # look for "Scope: User config"
+```
+
+> ⚠️ Do **not** put `mcpServers` in `~/.claude/settings.json`. Claude Code does not read MCP servers from that file, so the block is silently ignored. MCP configuration lives in `~/.claude.json` (local and user scope, written by `claude mcp add`) or in a project's `.mcp.json`.
 
 Restart Claude Code. Confirm the tools load via `/mcp`.
 
@@ -249,6 +250,15 @@ The project number in the error message is the same project as that `project_id`
 **`insufficient permission`** when calling a tool — the token was created with a smaller scope. Delete `token.json` and re-run `npm run auth`.
 
 **Tool doesn't appear in Claude** — confirm the path in your MCP config is absolute and points to `dist/index.js` (not `src/index.ts`). Ensure you ran `npm run build`.
+
+**Tools appear in one directory but not another** — the server was registered at *local* scope, which binds it to a single project path. Run `claude mcp get google-sheets`; if the scope is not `User config`, re-register it:
+
+```bash
+claude mcp remove google-sheets
+claude mcp add --scope user google-sheets -- node /absolute/path/to/mcp-google-sheets/dist/index.js
+```
+
+This matters most for unattended runs (cron, `launchd`, `claude -p`), where the working directory is often `/` rather than your project. Without the tools an agent may fall back to calling the Sheets API another way and report success without touching your sheet.
 
 **`No stored token` at server startup** — you skipped [step 5](#5-authorize). Run `npm run auth`.
 
