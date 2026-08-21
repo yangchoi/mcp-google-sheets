@@ -87,6 +87,23 @@ npm run auth
 - In your project, open [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com).
 - Click **Enable**.
 
+> ⚠️ **Check the project selector before you click Enable.** That link opens in whatever project the console last had selected — which is often *not* the project you just created. Enabling the API on the wrong project still shows a success screen, so this failure is silent: steps 3–5 will all succeed, and you won't find out until your first real tool call returns `Google Sheets API has not been used in project ... or it is disabled`.
+
+Verify the API is enabled on the right project before moving on:
+
+```bash
+gcloud services list --enabled --project=YOUR_PROJECT_ID | grep sheets
+# expected: sheets.googleapis.com   Google Sheets API
+```
+
+No output means it is not enabled. Enable it from the CLI instead:
+
+```bash
+gcloud services enable sheets.googleapis.com --project=YOUR_PROJECT_ID
+```
+
+Only the Sheets API is required — this server requests the `spreadsheets` scope alone, so you do not need to enable the Drive API.
+
 ### 3. Create OAuth 2.0 credentials
 
 - Open [Credentials](https://console.cloud.google.com/apis/credentials).
@@ -210,6 +227,20 @@ Environment variables (all optional):
 - Running the server does not require any network listening port at steady state (the temporary port `47319` is used only during the initial OAuth callback and is closed immediately after).
 
 ## Troubleshooting
+
+**`Google Sheets API has not been used in project <number> before or it is disabled`** — [step 2](#2-enable-the-sheets-api) never took effect on the project your credentials belong to. This is the most common failure, and it survives restarts: reauthorizing, rebuilding, or restarting your MCP client will not fix it, because OAuth succeeds independently of whether the API is enabled.
+
+Find the project your credentials actually use, then enable the API on *that* project:
+
+```bash
+# the project_id in your OAuth client file is the one that matters
+python3 -c "import json;print(json.load(open('$HOME/.config/mcp-google-sheets/credentials.json'))['installed']['project_id'])"
+
+gcloud services enable sheets.googleapis.com --project=THAT_PROJECT_ID
+gcloud services list --enabled --project=THAT_PROJECT_ID | grep sheets   # confirm
+```
+
+The project number in the error message is the same project as that `project_id`, just in numeric form. If `gcloud projects describe THAT_PROJECT_ID` says the project does not exist, you are logged into `gcloud` with a different Google account than the one that created it — run `gcloud auth login` and pick the right account.
 
 **`credentials.json not found`** — you missed [step 3–4](#3-create-oauth-20-credentials). Check the path.
 
