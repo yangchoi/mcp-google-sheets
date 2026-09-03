@@ -196,6 +196,26 @@ claude mcp get google-sheets   # look for "Scope: User config"
 
 Restart Claude Code. Confirm the tools load via `/mcp`.
 
+## Tests
+
+```bash
+npm test            # builds, then runs the suite
+npm run test:offline   # only the tests that need no credentials
+```
+
+The offline tests cover the CLI surface, the OAuth callback port handling, the
+advertised tool schemas, and the error shapes. They need no Google account.
+
+The live tests exercise the real Sheets API and are skipped unless you point
+them at a scratch spreadsheet — **they write to it**:
+
+```bash
+MCP_TEST_SPREADSHEET_ID=<id> npm test
+
+# if the first tab is not called "Sheet1"
+MCP_TEST_SPREADSHEET_ID=<id> MCP_TEST_SHEET_NAME=Data npm test
+```
+
 ## Available tools
 
 | Tool | Purpose |

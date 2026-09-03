@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { getAuthorizedClient } from "./auth.js";
+import { explain } from "./errors.js";
 
 async function main() {
   await getAuthorizedClient({ interactive: true });
@@ -7,6 +8,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
+  console.error(explain(err instanceof Error ? err.message : String(err), "auth"));
   process.exit(1);
 });

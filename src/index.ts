@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getAuthorizedClient } from "./auth.js";
+import { explain } from "./errors.js";
 import {
   makeSheetsClient,
   readRange,
@@ -189,12 +190,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS,
 }));
 
+const TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name as string));
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const auth = await getAuthorizedClient();
-  const sheets = makeSheetsClient(auth);
   const args = (request.params.arguments ?? {}) as Record<string, unknown>;
 
   try {
+    // Reject an unknown tool before authorizing: there is no point running an
+    // OAuth refresh for a call that cannot be served either way.
+    if (!TOOL_NAMES.has(request.params.name)) {
+      throw new Error(`Unknown tool: ${request.params.name}`);
+    }
+
+    // Authorizing inside the try matters. Outside it, a missing or dead token
+    // escaped the handler and came back as a JSON-RPC protocol error, so the
+    // guidance in explain() never reached the caller and the failure looked
+    // nothing like every other error this server returns.
+    const auth = await getAuthorizedClient();
+    const sheets = makeSheetsClient(auth);
+
     switch (request.params.name) {
       case "get_spreadsheet_metadata": {
         const result = await getSpreadsheetMetadata(
@@ -284,23 +298,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-/**
- * `invalid_grant` on its own says nothing about what to do. The refresh token is
- * gone (expired or revoked), and re-running `auth` is the fix — but the token file
- * has to be replaced, not just read. Spell that out at the point of failure.
- */
-function explain(message: string): string {
-  if (!/invalid_grant/i.test(message)) return message;
-  return (
-    `${message}\n\n` +
-    `The stored refresh token is no longer valid. Re-authorize:\n` +
-    `  npx @yangchoi/mcp-google-sheets auth\n\n` +
-    `If this happens roughly every 7 days, the OAuth app is still in "Testing" mode ` +
-    `in Google Cloud Console, which expires refresh tokens on that schedule. ` +
-    `Publishing the app stops it.`
-  );
-}
-
 function textReply(payload: unknown) {
   return {
     content: [
@@ -344,6 +341,8 @@ async function main() {
 main().catch((err) => {
   // Startup and auth failures are explained in the thrown message (missing
   // credentials, a busy callback port). A stack trace on top of that is noise.
-  console.error(err instanceof Error ? err.message : String(err));
+  const message = err instanceof Error ? err.message : String(err);
+  const context = process.argv[2] === "auth" ? "auth" : "tool";
+  console.error(explain(message, context));
   process.exit(1);
 });
