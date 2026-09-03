@@ -1,7 +1,8 @@
 import { google } from "googleapis";
+import type { Credentials } from "google-auth-library";
 import { OAuth2Client } from "google-auth-library";
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -21,6 +22,7 @@ const TOKEN_PATH =
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 const REDIRECT_PORT = 47319;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/oauth2callback`;
+const CONSENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface OAuthCredentialsFile {
   installed?: OAuthClientCredentials;
@@ -53,8 +55,13 @@ async function loadCredentials(): Promise<OAuthClientCredentials> {
 }
 
 async function saveToken(token: unknown): Promise<void> {
-  await mkdir(dirname(TOKEN_PATH), { recursive: true });
-  await writeFile(TOKEN_PATH, JSON.stringify(token, null, 2));
+  // The refresh token stored here grants ongoing access to the user's
+  // spreadsheets, so it must not be world-readable on a shared machine.
+  await mkdir(dirname(TOKEN_PATH), { recursive: true, mode: 0o700 });
+  await writeFile(TOKEN_PATH, JSON.stringify(token, null, 2), { mode: 0o600 });
+  // writeFile's mode only applies when it creates the file. Tokens written by
+  // an earlier version are already there at 0644, so tighten unconditionally.
+  await chmod(TOKEN_PATH, 0o600);
 }
 
 async function loadTokenIfPresent(): Promise<Record<string, unknown> | null> {
@@ -70,50 +77,100 @@ async function runOAuthFlow(client: OAuth2Client): Promise<void> {
     prompt: "consent",
   });
 
+  let resolveCode!: (code: string) => void;
+  let rejectCode!: (err: Error) => void;
   const codePromise = new Promise<string>((resolve, reject) => {
-    const server = createServer((req, res) => {
-      try {
-        const url = new URL(req.url ?? "/", REDIRECT_URI);
-        if (url.pathname !== "/oauth2callback") {
-          res.writeHead(404).end();
-          return;
-        }
-        const code = url.searchParams.get("code");
-        const error = url.searchParams.get("error");
-        if (error) {
-          res
-            .writeHead(400, { "Content-Type": "text/plain" })
-            .end(`OAuth error: ${error}`);
-          server.close();
-          reject(new Error(`OAuth error: ${error}`));
-          return;
-        }
-        if (!code) {
-          res.writeHead(400).end("Missing code");
-          return;
-        }
-        res
-          .writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
-          .end(
-            "<h1>Authentication complete.</h1><p>You can close this tab and return to the terminal.</p>"
-          );
-        server.close();
-        resolve(code);
-      } catch (err) {
-        server.close();
-        reject(err);
-      }
-    });
-    server.listen(REDIRECT_PORT);
+    resolveCode = resolve;
+    rejectCode = reject;
   });
 
-  console.error(`Opening browser for OAuth consent: ${authUrl}`);
-  await open(authUrl);
+  const server = createServer((req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", REDIRECT_URI);
+      if (url.pathname !== "/oauth2callback") {
+        res.writeHead(404).end();
+        return;
+      }
+      const error = url.searchParams.get("error");
+      if (error) {
+        res
+          .writeHead(400, { "Content-Type": "text/plain" })
+          .end(`OAuth error: ${error}`);
+        rejectCode(new Error(`OAuth error: ${error}`));
+        return;
+      }
+      const code = url.searchParams.get("code");
+      if (!code) {
+        res.writeHead(400).end("Missing code");
+        return;
+      }
+      res
+        .writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+        .end(
+          "<h1>Authentication complete.</h1><p>You can close this tab and return to the terminal.</p>"
+        );
+      resolveCode(code);
+    } catch (err) {
+      rejectCode(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
 
-  const code = await codePromise;
+  // Bind before opening the browser. Opening first meant that on a port clash
+  // the user got a consent screen redirecting to a port nothing was listening
+  // on, while the clash itself surfaced as an unhandled 'error' event and a
+  // raw stack trace rather than something actionable.
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      reject(
+        err.code === "EADDRINUSE"
+          ? new Error(
+              `Port ${REDIRECT_PORT} is already in use, so the OAuth callback cannot be ` +
+                `received. Find the process with 'lsof -i :${REDIRECT_PORT}', stop it, ` +
+                `and run auth again.`
+            )
+          : err
+      );
+    });
+    server.listen(REDIRECT_PORT, () => resolve());
+  });
+
+  const timeout = setTimeout(() => {
+    rejectCode(
+      new Error(
+        `Timed out after ${CONSENT_TIMEOUT_MS / 60000} minutes waiting for the OAuth ` +
+          `callback. If the consent screen never finished, run auth again.`
+      )
+    );
+  }, CONSENT_TIMEOUT_MS);
+
+  let code: string;
+  try {
+    console.error(`Opening browser for OAuth consent: ${authUrl}`);
+    await open(authUrl);
+    code = await codePromise;
+  } finally {
+    clearTimeout(timeout);
+    server.close();
+  }
+
   const { tokens } = await client.getToken(code);
-  client.setCredentials(tokens);
-  await saveToken(tokens);
+
+  // Google omits refresh_token when it decides one is still valid on its side.
+  // Keep the stored one in that case rather than writing a token we cannot refresh.
+  const previous = await loadTokenIfPresent();
+  const carriedOver =
+    typeof previous?.refresh_token === "string" ? previous.refresh_token : undefined;
+  const merged: Credentials & { authorized_at: number } = {
+    ...tokens,
+    refresh_token: tokens.refresh_token ?? carriedOver,
+    // Consent time, not refresh time. While the OAuth app is in "Testing" mode
+    // Google expires the refresh token 7 days after consent, and the file's mtime
+    // moves on every silent refresh, so it cannot answer "how long do we have left".
+    authorized_at: Date.now(),
+  };
+
+  client.setCredentials(merged);
+  await saveToken(merged);
   console.error(`Token saved to ${TOKEN_PATH}`);
 }
 
@@ -129,21 +186,30 @@ export async function getAuthorizedClient(
   );
 
   const existing = await loadTokenIfPresent();
-  if (existing) {
-    client.setCredentials(existing);
-    client.on("tokens", async (tokens) => {
-      const merged = { ...existing, ...tokens };
-      await saveToken(merged);
-    });
+
+  // Interactive means the user explicitly asked to (re-)authorize, so always run
+  // the consent flow. Returning a stored token here would make `auth` a no-op and
+  // leave a dead refresh token in place with no way to replace it.
+  if (interactive) {
+    await runOAuthFlow(client);
     return client;
   }
 
-  if (!interactive) {
+  if (!existing) {
     throw new Error(
-      `No stored token at ${TOKEN_PATH}. Run 'npx mcp-google-sheets auth' first to authorize.`
+      `No stored token at ${TOKEN_PATH}. Run 'npx @yangchoi/mcp-google-sheets auth' first to authorize.`
     );
   }
 
-  await runOAuthFlow(client);
+  client.setCredentials(existing);
+  client.on("tokens", (tokens) => {
+    // A rejecting promise returned to an EventEmitter is unhandled, and Node
+    // kills the process on an unhandled rejection. A failed write to the token
+    // cache must not take down a server whose in-memory credentials are fine.
+    saveToken({ ...existing, ...tokens }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Warning: could not persist refreshed token to ${TOKEN_PATH}: ${message}`);
+    });
+  });
   return client;
 }

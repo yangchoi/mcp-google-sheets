@@ -57,22 +57,16 @@ If you've wanted Claude to update a Google Sheet — a job-tracker, a habit log,
 ## Quick start
 
 ```bash
-# 1. Clone
-git clone https://github.com/yangchoi/mcp-google-sheets.git
-cd mcp-google-sheets
-
-# 2. Install and build
-npm install
-npm run build
-
-# 3. Put your Google Cloud OAuth credentials.json here
+# 1. Put your Google Cloud OAuth credentials.json here
+#    (how to obtain it: see Setup steps 1-3 below)
 mkdir -p ~/.config/mcp-google-sheets
 cp /path/to/downloaded-credentials.json ~/.config/mcp-google-sheets/credentials.json
 
-# 4. Authorize (opens browser once)
-npm run auth
+# 2. Authorize (opens browser once)
+npx @yangchoi/mcp-google-sheets auth
 
-# 5. Register with Claude — see below
+# 3. Register with Claude
+claude mcp add --scope user google-sheets -- npx -y @yangchoi/mcp-google-sheets
 ```
 
 ## Setup
@@ -128,6 +122,16 @@ mv ~/Downloads/client_secret_*.json ~/.config/mcp-google-sheets/credentials.json
 
 ### 4. Install the server
 
+Nothing to install if you run it with `npx` — the commands below fetch the
+published package on demand. To pin a copy instead:
+
+```bash
+npm install -g @yangchoi/mcp-google-sheets
+```
+
+<details>
+<summary>Or build from source</summary>
+
 ```bash
 git clone https://github.com/yangchoi/mcp-google-sheets.git
 cd mcp-google-sheets
@@ -135,15 +139,25 @@ npm install
 npm run build
 ```
 
+Then substitute `node /absolute/path/to/mcp-google-sheets/dist/index.js` for
+`npx -y @yangchoi/mcp-google-sheets` everywhere below, and `npm run auth` for
+the `auth` command.
+</details>
+
 ### 5. Authorize
 
 Run the one-time OAuth flow. Your browser will open, you approve access to your own Sheets, and the resulting token is stored at `~/.config/mcp-google-sheets/token.json`.
 
 ```bash
-npm run auth
+npx @yangchoi/mcp-google-sheets auth
 ```
 
-You should see `Authorization complete. Token saved.` in the terminal.
+You should see `Authorization complete. Token saved.` in the terminal. The token
+is written with `0600` permissions so other accounts on the machine cannot read
+your refresh token.
+
+The flow needs port `47319` free for the OAuth callback; if something else holds
+it, the command says so and exits without opening a browser.
 
 ## Register with your MCP client
 
@@ -155,8 +169,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 {
   "mcpServers": {
     "google-sheets": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-google-sheets/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@yangchoi/mcp-google-sheets"]
     }
   }
 }
@@ -169,7 +183,7 @@ Restart Claude Desktop. The Sheets tools will appear in the tool picker.
 Register the server with the CLI:
 
 ```bash
-claude mcp add --scope user google-sheets -- node /absolute/path/to/mcp-google-sheets/dist/index.js
+claude mcp add --scope user google-sheets -- npx -y @yangchoi/mcp-google-sheets
 ```
 
 `--scope user` makes the server available in **every** project on your machine. Without it the server is added at *local* scope, which loads only in the directory you ran the command from — a common surprise when a scheduled job or a session started elsewhere suddenly has no sheet tools. Check what you got with:
@@ -187,7 +201,7 @@ Restart Claude Code. Confirm the tools load via `/mcp`.
 | Tool | Purpose |
 |---|---|
 | `get_spreadsheet_metadata` | List sheet tabs and their dimensions. Call first to discover sheet names. |
-| `read_range` | Read cell values in A1 notation. |
+| `read_range` | Read cell values in A1 notation. Returns typed values (numbers as numbers) by default; pass `valueRenderOption` for display strings or formulas. |
 | `update_range` | Overwrite cells in a specific range. |
 | `append_row` | Append one or more rows after the last row with data. |
 | `clear_range` | Clear values in a range without deleting formatting. |
@@ -247,7 +261,7 @@ The project number in the error message is the same project as that `project_id`
 
 **`Error: access_denied`** during OAuth — your Google account is not listed as a test user on the OAuth consent screen. Go to [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent) → add your email under **Test users**.
 
-**`insufficient permission`** when calling a tool — the token was created with a smaller scope. Delete `token.json` and re-run `npm run auth`.
+**`insufficient permission`** when calling a tool — the token was created with a smaller scope. Delete `token.json` and re-run `npx @yangchoi/mcp-google-sheets auth`.
 
 **Tool doesn't appear in Claude** — confirm the path in your MCP config is absolute and points to `dist/index.js` (not `src/index.ts`). Ensure you ran `npm run build`.
 
@@ -255,12 +269,12 @@ The project number in the error message is the same project as that `project_id`
 
 ```bash
 claude mcp remove google-sheets
-claude mcp add --scope user google-sheets -- node /absolute/path/to/mcp-google-sheets/dist/index.js
+claude mcp add --scope user google-sheets -- npx -y @yangchoi/mcp-google-sheets
 ```
 
 This matters most for unattended runs (cron, `launchd`, `claude -p`), where the working directory is often `/` rather than your project. Without the tools an agent may fall back to calling the Sheets API another way and report success without touching your sheet.
 
-**`No stored token` at server startup** — you skipped [step 5](#5-authorize). Run `npm run auth`.
+**`No stored token` at server startup** — you skipped [step 5](#5-authorize). Run `npx @yangchoi/mcp-google-sheets auth`.
 
 ## Development
 

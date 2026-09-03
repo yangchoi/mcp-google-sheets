@@ -1,7 +1,7 @@
 {
-  "name": "mcp-google-sheets",
+  "name": "@yangchoi/mcp-google-sheets",
   "version": "0.1.0",
-  "description": "A Model Context Protocol (MCP) server for Google Sheets — read, write, and manage spreadsheets from Claude Desktop, Claude Code, or any MCP-compatible AI client.",
+  "description": "A Model Context Protocol (MCP) server for Google Sheets \u2014 read, write, and manage spreadsheets from Claude Desktop, Claude Code, or any MCP-compatible AI client.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -21,18 +21,28 @@
     "oauth",
     "typescript"
   ],
-  "author": "",
+  "author": "yangchoi",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yangchoi/mcp-google-sheets.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yangchoi/mcp-google-sheets/issues"
+  },
+  "homepage": "https://github.com/yangchoi/mcp-google-sheets#readme",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "mcp-google-sheets": "dist/index.js"
+    "mcp-google-sheets": "dist/index.js",
+    "mcp-google-sheets-auth": "dist/auth-cli.js"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "auth": "node dist/auth-cli.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
@@ -50,5 +60,8 @@
     "dist",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

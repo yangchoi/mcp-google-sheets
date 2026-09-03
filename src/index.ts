@@ -41,7 +41,7 @@ const TOOLS = [
   {
     name: "read_range",
     description:
-      "Read cell values from a range in a Google Sheets spreadsheet. Returns a 2D array of values. Empty trailing rows/columns are omitted.",
+      "Read cell values from a range in a Google Sheets spreadsheet. Returns a 2D array of values. Empty trailing rows/columns are omitted, so rows may be ragged. Numbers come back as numbers and dates as readable strings by default.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -50,6 +50,18 @@ const TOOLS = [
           type: "string",
           description:
             "A1 notation range (e.g., 'Sheet1!A1:D10' or 'Sheet1' for the whole sheet).",
+        },
+        valueRenderOption: {
+          type: "string",
+          enum: ["UNFORMATTED_VALUE", "FORMATTED_VALUE", "FORMULA"],
+          description:
+            "UNFORMATTED_VALUE (default) returns raw typed values — use this for any calculation. FORMATTED_VALUE returns what the cell displays, as strings ('1,234,567', '$5.00'). FORMULA returns the formula text instead of its result.",
+        },
+        dateTimeRenderOption: {
+          type: "string",
+          enum: ["FORMATTED_STRING", "SERIAL_NUMBER"],
+          description:
+            "Only applies with UNFORMATTED_VALUE. FORMATTED_STRING (default) renders dates as readable text; SERIAL_NUMBER returns the underlying Sheets date serial for date arithmetic.",
         },
       },
       required: ["spreadsheetId", "range"],
@@ -195,6 +207,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await readRange(sheets, {
           spreadsheetId: args.spreadsheetId as string,
           range: args.range as string,
+          valueRenderOption: args.valueRenderOption as
+            | "FORMATTED_VALUE"
+            | "UNFORMATTED_VALUE"
+            | "FORMULA"
+            | undefined,
+          dateTimeRenderOption: args.dateTimeRenderOption as
+            | "SERIAL_NUMBER"
+            | "FORMATTED_STRING"
+            | undefined,
         });
         return textReply({
           range: args.range,
@@ -257,11 +278,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text" as const, text: `Error: ${message}` }],
+      content: [{ type: "text" as const, text: `Error: ${explain(message)}` }],
       isError: true,
     };
   }
 });
+
+/**
+ * `invalid_grant` on its own says nothing about what to do. The refresh token is
+ * gone (expired or revoked), and re-running `auth` is the fix — but the token file
+ * has to be replaced, not just read. Spell that out at the point of failure.
+ */
+function explain(message: string): string {
+  if (!/invalid_grant/i.test(message)) return message;
+  return (
+    `${message}\n\n` +
+    `The stored refresh token is no longer valid. Re-authorize:\n` +
+    `  npx @yangchoi/mcp-google-sheets auth\n\n` +
+    `If this happens roughly every 7 days, the OAuth app is still in "Testing" mode ` +
+    `in Google Cloud Console, which expires refresh tokens on that schedule. ` +
+    `Publishing the app stops it.`
+  );
+}
 
 function textReply(payload: unknown) {
   return {
@@ -271,13 +309,41 @@ function textReply(payload: unknown) {
   };
 }
 
+const USAGE = `Usage:
+  mcp-google-sheets          Run the MCP server on stdio (default)
+  mcp-google-sheets auth     Run the OAuth consent flow and store a token
+  mcp-google-sheets --help   Show this message`;
+
 async function main() {
+  const [subcommand] = process.argv.slice(2);
+
+  // The README and the invalid_grant hint both tell users to run `auth`, so the
+  // binary has to answer to it. Without this branch every argument was ignored
+  // and `... auth` silently started the stdio server, which looks like a hang.
+  if (subcommand === "auth") {
+    await getAuthorizedClient({ interactive: true });
+    console.error("Authorization complete. Token saved.");
+    return;
+  }
+
+  if (subcommand === "--help" || subcommand === "-h") {
+    console.log(USAGE);
+    return;
+  }
+
+  if (subcommand !== undefined && subcommand !== "serve") {
+    console.error(`Unknown command: ${subcommand}\n\n${USAGE}`);
+    process.exit(1);
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("mcp-google-sheets server running on stdio");
 }
 
 main().catch((err) => {
-  console.error(err);
+  // Startup and auth failures are explained in the thrown message (missing
+  // credentials, a busy callback port). A stack trace on top of that is noise.
+  console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

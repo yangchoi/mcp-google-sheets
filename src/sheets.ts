@@ -7,9 +7,18 @@ export function makeSheetsClient(auth: OAuth2Client): sheets_v4.Sheets {
 
 export type ValueInputOption = "RAW" | "USER_ENTERED";
 
+export type ValueRenderOption =
+  | "FORMATTED_VALUE"
+  | "UNFORMATTED_VALUE"
+  | "FORMULA";
+
+export type DateTimeRenderOption = "SERIAL_NUMBER" | "FORMATTED_STRING";
+
 export interface ReadRangeParams {
   spreadsheetId: string;
   range: string;
+  valueRenderOption?: ValueRenderOption;
+  dateTimeRenderOption?: DateTimeRenderOption;
 }
 
 export async function readRange(
@@ -19,6 +28,13 @@ export async function readRange(
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: params.spreadsheetId,
     range: params.range,
+    // The API defaults to FORMATTED_VALUE, which returns locale-formatted
+    // strings: 1234567 comes back as "1,234,567" and every number is a string,
+    // so any arithmetic on the result is wrong. UNFORMATTED_VALUE keeps numbers
+    // numeric; it also turns dates into serial numbers, which FORMATTED_STRING
+    // undoes without re-stringifying the numbers.
+    valueRenderOption: params.valueRenderOption ?? "UNFORMATTED_VALUE",
+    dateTimeRenderOption: params.dateTimeRenderOption ?? "FORMATTED_STRING",
   });
   return (res.data.values as (string | number | boolean)[][]) ?? [];
 }
