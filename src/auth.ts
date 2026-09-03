@@ -85,6 +85,53 @@ async function loadTokenIfPresent(): Promise<Record<string, unknown> | null> {
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
+/**
+ * While the OAuth app is in "Testing" mode, Google expires the refresh token
+ * seven days after consent. A published app has no such limit.
+ */
+export const TESTING_MODE_LIFETIME_DAYS = 7;
+
+export type TokenStatus =
+  | { state: "missing"; tokenPath: string }
+  | { state: "unusable"; tokenPath: string; reason: string }
+  | { state: "unknown-age"; tokenPath: string }
+  | { state: "known"; tokenPath: string; authorizedAt: Date; daysLeft: number };
+
+/** Split out from the file read so the arithmetic can be tested directly. */
+export function describeToken(
+  token: Record<string, unknown> | null,
+  now: number
+): TokenStatus {
+  if (token === null) return { state: "missing", tokenPath: TOKEN_PATH };
+
+  if (typeof token.refresh_token !== "string" || token.refresh_token.length === 0) {
+    return {
+      state: "unusable",
+      tokenPath: TOKEN_PATH,
+      reason: "the stored token has no refresh_token",
+    };
+  }
+
+  // Written at consent time, not refresh time. The file's mtime moves on every
+  // silent refresh, so it cannot answer "how long do we have left".
+  if (typeof token.authorized_at !== "number") {
+    return { state: "unknown-age", tokenPath: TOKEN_PATH };
+  }
+
+  const authorizedAt = new Date(token.authorized_at);
+  const elapsedDays = (now - token.authorized_at) / 86_400_000;
+  return {
+    state: "known",
+    tokenPath: TOKEN_PATH,
+    authorizedAt,
+    daysLeft: TESTING_MODE_LIFETIME_DAYS - elapsedDays,
+  };
+}
+
+export async function readTokenStatus(now = Date.now()): Promise<TokenStatus> {
+  return describeToken(await loadTokenIfPresent(), now);
+}
+
 async function runOAuthFlow(client: OAuth2Client): Promise<void> {
   const authUrl = client.generateAuthUrl({
     access_type: "offline",

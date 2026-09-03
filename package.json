@@ -44,7 +44,8 @@
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs",
-    "test:offline": "npm run build && node --test test/cli.test.mjs test/errors.test.mjs"
+    "test:offline": "npm run build && node --test test/cli.test.mjs test/errors.test.mjs",
+    "check-auth": "node dist/check-auth.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

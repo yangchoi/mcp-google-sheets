@@ -196,6 +196,25 @@ claude mcp get google-sheets   # look for "Scope: User config"
 
 Restart Claude Code. Confirm the tools load via `/mcp`.
 
+## Checking the token
+
+While the OAuth app is in "Testing" mode Google expires the refresh token seven
+days after consent, which is the most common reason a working setup stops
+working. This reports how much of that window is left:
+
+```bash
+npx @yangchoi/mcp-google-sheets check-auth   # installed
+npm run check-auth                           # from a clone
+```
+
+```
+Last authorized: 2026-09-03 15:19
+7.0 days left, if the OAuth app is still in "Testing" mode (published apps do not expire on this schedule).
+```
+
+It exits `0` when there is time left, `1` when expiry is close, and `2` when the
+token is already unusable or missing, so it can gate a scheduled job.
+
 ## Tests
 
 ```bash

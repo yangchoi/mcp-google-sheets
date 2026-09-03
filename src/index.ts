@@ -340,9 +340,10 @@ function textReply(payload: unknown) {
 }
 
 const USAGE = `Usage:
-  mcp-google-sheets          Run the MCP server on stdio (default)
-  mcp-google-sheets auth     Run the OAuth consent flow and store a token
-  mcp-google-sheets --help   Show this message`;
+  mcp-google-sheets              Run the MCP server on stdio (default)
+  mcp-google-sheets auth         Run the OAuth consent flow and store a token
+  mcp-google-sheets check-auth   Report how much of the token's lifetime is left
+  mcp-google-sheets --help       Show this message`;
 
 async function main() {
   const [subcommand] = process.argv.slice(2);
@@ -354,6 +355,11 @@ async function main() {
     await getAuthorizedClient({ interactive: true });
     console.error("Authorization complete. Token saved.");
     return;
+  }
+
+  if (subcommand === "check-auth") {
+    const { checkAuth } = await import("./check-auth.js");
+    process.exit(await checkAuth());
   }
 
   if (subcommand === "--help" || subcommand === "-h") {
