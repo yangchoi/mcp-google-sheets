@@ -5,8 +5,15 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getAuthorizedClient } from "./auth.js";
+import { createRequire } from "node:module";
+import { getAuthorizedClient, resetAuthorizedClient } from "./auth.js";
 import { explain } from "./errors.js";
+import {
+  requiredString,
+  optionalEnum,
+  requiredGrid,
+  requiredRangeValues,
+} from "./validate.js";
 import {
   makeSheetsClient,
   readRange,
@@ -17,10 +24,39 @@ import {
   batchUpdateValues,
 } from "./sheets.js";
 
+// Read the version rather than repeating it: a second copy here drifts from
+// package.json on the first release where someone bumps only one of them.
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json") as { version: string };
+
 const server = new Server(
-  { name: "mcp-google-sheets", version: "0.1.0" },
+  { name: "mcp-google-sheets", version },
   { capabilities: { tools: {} } }
 );
+
+const VALUE_INPUT_OPTIONS = ["RAW", "USER_ENTERED"] as const;
+const INSERT_DATA_OPTIONS = ["OVERWRITE", "INSERT_ROWS"] as const;
+const VALUE_RENDER_OPTIONS = [
+  "UNFORMATTED_VALUE",
+  "FORMATTED_VALUE",
+  "FORMULA",
+] as const;
+const DATE_TIME_RENDER_OPTIONS = ["FORMATTED_STRING", "SERIAL_NUMBER"] as const;
+
+// A type array ("type": ["string", "number", ...]) is valid JSON Schema, but
+// several MCP clients validate tool schemas with tooling that rejects it.
+// anyOf expresses the same union and is accepted everywhere.
+const CELL_SCHEMA = {
+  anyOf: [
+    { type: "string" },
+    { type: "number" },
+    { type: "boolean" },
+    { type: "null" },
+  ],
+  description: "A cell value. null leaves the existing cell untouched.",
+} as const;
+
+const ROW_SCHEMA = { type: "array", items: CELL_SCHEMA } as const;
 
 const TOOLS = [
   {
@@ -84,10 +120,7 @@ const TOOLS = [
           type: "array",
           description:
             "2D array of values. Outer array = rows, inner arrays = cells in that row.",
-          items: {
-            type: "array",
-            items: { type: ["string", "number", "boolean"] },
-          },
+          items: ROW_SCHEMA,
         },
         valueInputOption: {
           type: "string",
@@ -115,10 +148,7 @@ const TOOLS = [
         values: {
           type: "array",
           description: "2D array of rows to append.",
-          items: {
-            type: "array",
-            items: { type: ["string", "number", "boolean"] },
-          },
+          items: ROW_SCHEMA,
         },
         valueInputOption: {
           type: "string",
@@ -164,13 +194,7 @@ const TOOLS = [
             type: "object",
             properties: {
               range: { type: "string" },
-              values: {
-                type: "array",
-                items: {
-                  type: "array",
-                  items: { type: ["string", "number", "boolean"] },
-                },
-              },
+              values: { type: "array", items: ROW_SCHEMA },
             },
             required: ["range", "values"],
           },
@@ -190,107 +214,116 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS,
 }));
 
-const TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name as string));
+type Sheets = ReturnType<typeof makeSheetsClient>;
+
+/**
+ * Each entry validates its arguments and returns a closure that performs the
+ * call. Splitting it this way keeps argument checking ahead of authorization:
+ * a malformed call should say what is wrong with it rather than demanding
+ * credentials first, and it should never trigger an OAuth refresh for a
+ * request that cannot succeed anyway.
+ */
+const HANDLERS: Record<
+  string,
+  (args: Record<string, unknown>) => (sheets: Sheets) => Promise<unknown>
+> = {
+  get_spreadsheet_metadata: (args) => {
+    const tool = "get_spreadsheet_metadata";
+    const spreadsheetId = requiredString(tool, args, "spreadsheetId");
+    return (sheets) => getSpreadsheetMetadata(sheets, spreadsheetId);
+  },
+
+  read_range: (args) => {
+    const tool = "read_range";
+    const params = {
+      spreadsheetId: requiredString(tool, args, "spreadsheetId"),
+      range: requiredString(tool, args, "range"),
+      valueRenderOption: optionalEnum(tool, args, "valueRenderOption", VALUE_RENDER_OPTIONS),
+      dateTimeRenderOption: optionalEnum(
+        tool,
+        args,
+        "dateTimeRenderOption",
+        DATE_TIME_RENDER_OPTIONS
+      ),
+    };
+    return async (sheets) => {
+      const values = await readRange(sheets, params);
+      return { range: params.range, rowCount: values.length, values };
+    };
+  },
+
+  update_range: (args) => {
+    const tool = "update_range";
+    const params = {
+      spreadsheetId: requiredString(tool, args, "spreadsheetId"),
+      range: requiredString(tool, args, "range"),
+      values: requiredGrid(tool, args, "values"),
+      valueInputOption: optionalEnum(tool, args, "valueInputOption", VALUE_INPUT_OPTIONS),
+    };
+    return (sheets) => updateRange(sheets, params);
+  },
+
+  append_row: (args) => {
+    const tool = "append_row";
+    const params = {
+      spreadsheetId: requiredString(tool, args, "spreadsheetId"),
+      range: requiredString(tool, args, "range"),
+      values: requiredGrid(tool, args, "values"),
+      valueInputOption: optionalEnum(tool, args, "valueInputOption", VALUE_INPUT_OPTIONS),
+      insertDataOption: optionalEnum(tool, args, "insertDataOption", INSERT_DATA_OPTIONS),
+    };
+    return (sheets) => appendRow(sheets, params);
+  },
+
+  clear_range: (args) => {
+    const tool = "clear_range";
+    const params = {
+      spreadsheetId: requiredString(tool, args, "spreadsheetId"),
+      range: requiredString(tool, args, "range"),
+    };
+    return (sheets) => clearRange(sheets, params);
+  },
+
+  batch_update_values: (args) => {
+    const tool = "batch_update_values";
+    const params = {
+      spreadsheetId: requiredString(tool, args, "spreadsheetId"),
+      data: requiredRangeValues(tool, args, "data"),
+      valueInputOption: optionalEnum(tool, args, "valueInputOption", VALUE_INPUT_OPTIONS),
+    };
+    return (sheets) => batchUpdateValues(sheets, params);
+  },
+};
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+  const tool = request.params.name;
 
   try {
-    // Reject an unknown tool before authorizing: there is no point running an
-    // OAuth refresh for a call that cannot be served either way.
-    if (!TOOL_NAMES.has(request.params.name)) {
-      throw new Error(`Unknown tool: ${request.params.name}`);
+    const prepare = HANDLERS[tool];
+    if (!prepare) {
+      throw new Error(`Unknown tool: ${tool}`);
     }
+
+    // Validation first: no credentials needed to tell someone their range is
+    // missing, and no point refreshing a token for a call that cannot run.
+    const execute = prepare(args);
 
     // Authorizing inside the try matters. Outside it, a missing or dead token
     // escaped the handler and came back as a JSON-RPC protocol error, so the
     // guidance in explain() never reached the caller and the failure looked
     // nothing like every other error this server returns.
     const auth = await getAuthorizedClient();
-    const sheets = makeSheetsClient(auth);
 
-    switch (request.params.name) {
-      case "get_spreadsheet_metadata": {
-        const result = await getSpreadsheetMetadata(
-          sheets,
-          args.spreadsheetId as string
-        );
-        return textReply(result);
-      }
-      case "read_range": {
-        const result = await readRange(sheets, {
-          spreadsheetId: args.spreadsheetId as string,
-          range: args.range as string,
-          valueRenderOption: args.valueRenderOption as
-            | "FORMATTED_VALUE"
-            | "UNFORMATTED_VALUE"
-            | "FORMULA"
-            | undefined,
-          dateTimeRenderOption: args.dateTimeRenderOption as
-            | "SERIAL_NUMBER"
-            | "FORMATTED_STRING"
-            | undefined,
-        });
-        return textReply({
-          range: args.range,
-          rowCount: result.length,
-          values: result,
-        });
-      }
-      case "update_range": {
-        const result = await updateRange(sheets, {
-          spreadsheetId: args.spreadsheetId as string,
-          range: args.range as string,
-          values: args.values as (string | number | boolean)[][],
-          valueInputOption: args.valueInputOption as
-            | "RAW"
-            | "USER_ENTERED"
-            | undefined,
-        });
-        return textReply(result);
-      }
-      case "append_row": {
-        const result = await appendRow(sheets, {
-          spreadsheetId: args.spreadsheetId as string,
-          range: args.range as string,
-          values: args.values as (string | number | boolean)[][],
-          valueInputOption: args.valueInputOption as
-            | "RAW"
-            | "USER_ENTERED"
-            | undefined,
-          insertDataOption: args.insertDataOption as
-            | "OVERWRITE"
-            | "INSERT_ROWS"
-            | undefined,
-        });
-        return textReply(result);
-      }
-      case "clear_range": {
-        const result = await clearRange(sheets, {
-          spreadsheetId: args.spreadsheetId as string,
-          range: args.range as string,
-        });
-        return textReply(result);
-      }
-      case "batch_update_values": {
-        const result = await batchUpdateValues(sheets, {
-          spreadsheetId: args.spreadsheetId as string,
-          data: args.data as {
-            range: string;
-            values: (string | number | boolean)[][];
-          }[],
-          valueInputOption: args.valueInputOption as
-            | "RAW"
-            | "USER_ENTERED"
-            | undefined,
-        });
-        return textReply(result);
-      }
-      default:
-        throw new Error(`Unknown tool: ${request.params.name}`);
-    }
+    return textReply(await execute(makeSheetsClient(auth)));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // A credentials failure sticks to the cached client, so drop it. The next
+    // call then picks up a token written by an `auth` run in another terminal
+    // instead of failing until the server is restarted.
+    if (/invalid_grant|No stored token|credentials\.json/i.test(message)) {
+      resetAuthorizedClient();
+    }
     return {
       content: [{ type: "text" as const, text: `Error: ${explain(message)}` }],
       isError: true,

@@ -7,6 +7,12 @@ export function makeSheetsClient(auth: OAuth2Client): sheets_v4.Sheets {
 
 export type ValueInputOption = "RAW" | "USER_ENTERED";
 
+/**
+ * A single cell being written. null is accepted by the API and leaves the
+ * existing cell untouched, which is not the same as writing an empty string.
+ */
+export type Cell = string | number | boolean | null;
+
 export type ValueRenderOption =
   | "FORMATTED_VALUE"
   | "UNFORMATTED_VALUE"
@@ -42,7 +48,7 @@ export async function readRange(
 export interface UpdateRangeParams {
   spreadsheetId: string;
   range: string;
-  values: (string | number | boolean)[][];
+  values: Cell[][];
   valueInputOption?: ValueInputOption;
 }
 
@@ -65,7 +71,7 @@ export async function updateRange(
 export interface AppendRowParams {
   spreadsheetId: string;
   range: string;
-  values: (string | number | boolean)[][];
+  values: Cell[][];
   valueInputOption?: ValueInputOption;
   insertDataOption?: "OVERWRITE" | "INSERT_ROWS";
 }
@@ -135,7 +141,7 @@ export interface BatchUpdateParams {
   spreadsheetId: string;
   data: {
     range: string;
-    values: (string | number | boolean)[][];
+    values: Cell[][];
   }[];
   valueInputOption?: ValueInputOption;
 }

@@ -173,6 +173,39 @@ describe("live sheets api", { skip }, () => {
   });
 });
 
+// The server used to rebuild the OAuth client on every single tool call,
+// re-reading two files and registering another token listener each time.
+describe("client reuse", { skip }, () => {
+  test("credentials are read once, not per call", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mcp-sheets-cache-"));
+    try {
+      await copyFile(join(CONFIG_DIR, "credentials.json"), join(dir, "credentials.json"));
+      await copyFile(join(CONFIG_DIR, "token.json"), join(dir, "token.json"));
+
+      const client = await connect({ MCP_GOOGLE_SHEETS_CONFIG_DIR: dir });
+      try {
+        const first = await client.call("get_spreadsheet_metadata", {
+          spreadsheetId: SPREADSHEET_ID,
+        });
+        assert.equal(first.isError, false);
+
+        // If the client were rebuilt per call, losing this file would break
+        // the next one.
+        await rm(join(dir, "credentials.json"));
+
+        const second = await client.call("get_spreadsheet_metadata", {
+          spreadsheetId: SPREADSHEET_ID,
+        });
+        assert.equal(second.isError, false, "the authorized client should be reused");
+      } finally {
+        client.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Regression: the refresh token was written world-readable.
 describe("token file permissions", { skip }, () => {
   test("a refreshed token is tightened to 0600", async () => {

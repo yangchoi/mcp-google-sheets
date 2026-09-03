@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 import { run, connect, AUTH_CLI } from "./helpers/mcp-client.mjs";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** A config dir with no credentials and no token. */
 let emptyDir;
@@ -149,6 +154,51 @@ describe("tool surface", () => {
     }
   });
 
+  // Regression: the version was hardcoded here as well as in package.json,
+  // so a release that bumped one left the other behind.
+  test("the advertised version matches package.json", async () => {
+    const pkg = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+    const client = await connect({ MCP_GOOGLE_SHEETS_CONFIG_DIR: emptyDir });
+    try {
+      const { result } = await client.send("initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "version-check", version: "0" },
+      });
+      assert.equal(result.serverInfo.version, pkg.version);
+    } finally {
+      client.close();
+    }
+  });
+
+  // A type array is legal JSON Schema but several MCP clients validate tool
+  // schemas with tooling that rejects it; anyOf says the same thing portably.
+  test("no schema uses a JSON Schema type array", async () => {
+    const client = await connect({ MCP_GOOGLE_SHEETS_CONFIG_DIR: emptyDir });
+    try {
+      const tools = await client.listTools();
+      const typeArrays = [];
+      const walk = (node, path) => {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node.type)) typeArrays.push(path);
+        for (const [key, value] of Object.entries(node)) {
+          if (value && typeof value === "object") walk(value, `${path}.${key}`);
+        }
+      };
+      for (const tool of tools) walk(tool.inputSchema, tool.name);
+      assert.deepEqual(typeArrays, []);
+
+      const cell = tools.find((t) => t.name === "update_range")
+        .inputSchema.properties.values.items.items;
+      assert.deepEqual(
+        cell.anyOf.map((entry) => entry.type),
+        ["string", "number", "boolean", "null"]
+      );
+    } finally {
+      client.close();
+    }
+  });
+
   test("a call without a stored token explains how to authorize", async () => {
     const client = await connect({
       MCP_GOOGLE_SHEETS_CONFIG_DIR: fakeCredsDir,
@@ -168,6 +218,47 @@ describe("tool surface", () => {
       );
     } finally {
       client.close();
+    }
+  });
+
+  // The client is cached, so a failure must not be cached with it: a token
+  // written by an `auth` run in another terminal has to be picked up without
+  // restarting the server.
+  test("a credentials failure is not cached", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mcp-sheets-recover-"));
+    try {
+      await writeFile(
+        join(dir, "credentials.json"),
+        JSON.stringify({
+          installed: { client_id: "test-id", client_secret: "test-secret" },
+        })
+      );
+      const client = await connect({ MCP_GOOGLE_SHEETS_CONFIG_DIR: dir });
+      try {
+        const first = await client.call("get_spreadsheet_metadata", {
+          spreadsheetId: "abc",
+        });
+        assert.match(first.text, /No stored token/);
+
+        // Stand in for the user running `auth` in another terminal.
+        await writeFile(
+          join(dir, "token.json"),
+          JSON.stringify({ refresh_token: "appeared-later", expiry_date: 1 })
+        );
+
+        const second = await client.call("get_spreadsheet_metadata", {
+          spreadsheetId: "abc",
+        });
+        assert.doesNotMatch(
+          second.text,
+          /No stored token/,
+          "the token file should be re-read after a credentials failure"
+        );
+      } finally {
+        client.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 

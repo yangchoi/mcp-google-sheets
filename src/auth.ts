@@ -2,7 +2,7 @@ import { google } from "googleapis";
 import type { Credentials } from "google-auth-library";
 import { OAuth2Client } from "google-auth-library";
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
+import { readFile, writeFile, mkdir, chmod, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -54,14 +54,29 @@ async function loadCredentials(): Promise<OAuthClientCredentials> {
   return creds;
 }
 
-async function saveToken(token: unknown): Promise<void> {
+async function writeTokenFile(token: unknown): Promise<void> {
   // The refresh token stored here grants ongoing access to the user's
   // spreadsheets, so it must not be world-readable on a shared machine.
   await mkdir(dirname(TOKEN_PATH), { recursive: true, mode: 0o700 });
-  await writeFile(TOKEN_PATH, JSON.stringify(token, null, 2), { mode: 0o600 });
-  // writeFile's mode only applies when it creates the file. Tokens written by
-  // an earlier version are already there at 0644, so tighten unconditionally.
+  // Write to a sibling and rename, so a crash mid-write cannot leave a
+  // truncated token behind where a complete one used to be.
+  const temporaryPath = `${TOKEN_PATH}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, JSON.stringify(token, null, 2), { mode: 0o600 });
+  await rename(temporaryPath, TOKEN_PATH);
+  // The mode above only applies to files being created. Tokens written by an
+  // earlier version are already in place at 0644, so tighten unconditionally.
   await chmod(TOKEN_PATH, 0o600);
+}
+
+let pendingWrite: Promise<void> = Promise.resolve();
+
+function saveToken(token: unknown): Promise<void> {
+  // Serialised so two refreshes landing together cannot interleave.
+  pendingWrite = pendingWrite.then(
+    () => writeTokenFile(token),
+    () => writeTokenFile(token)
+  );
+  return pendingWrite;
 }
 
 async function loadTokenIfPresent(): Promise<Record<string, unknown> | null> {
@@ -174,10 +189,29 @@ async function runOAuthFlow(client: OAuth2Client): Promise<void> {
   console.error(`Token saved to ${TOKEN_PATH}`);
 }
 
+/**
+ * Building a client re-reads two files off disk and registers another token
+ * listener, and the MCP server did that on every single tool call. One client
+ * is also what keeps concurrent refreshes from racing each other to the token
+ * file, since google-auth-library dedupes refreshes per client.
+ */
+let cachedClient: OAuth2Client | null = null;
+
+/**
+ * Drop the cached client so the next call re-reads the token file. Called when
+ * a request fails on credentials, which is what happens to a long-running
+ * server after the user re-authorizes in another terminal.
+ */
+export function resetAuthorizedClient(): void {
+  cachedClient = null;
+}
+
 export async function getAuthorizedClient(
   options: { interactive?: boolean } = {}
 ): Promise<OAuth2Client> {
   const { interactive = false } = options;
+  if (!interactive && cachedClient) return cachedClient;
+
   const creds = await loadCredentials();
   const client = new google.auth.OAuth2(
     creds.client_id,
@@ -191,6 +225,7 @@ export async function getAuthorizedClient(
   // the consent flow. Returning a stored token here would make `auth` a no-op and
   // leave a dead refresh token in place with no way to replace it.
   if (interactive) {
+    cachedClient = null;
     await runOAuthFlow(client);
     return client;
   }
@@ -211,5 +246,6 @@ export async function getAuthorizedClient(
       console.error(`Warning: could not persist refreshed token to ${TOKEN_PATH}: ${message}`);
     });
   });
+  cachedClient = client;
   return client;
 }
