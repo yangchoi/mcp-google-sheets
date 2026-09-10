@@ -279,7 +279,7 @@ export async function getAuthorizedClient(
 
   if (!existing) {
     throw new Error(
-      `No stored token at ${TOKEN_PATH}. Run 'npx @yangchoi/mcp-google-sheets auth' first to authorize.`
+      `No stored token at ${TOKEN_PATH}. Run 'npx @heyyang/mcp-google-sheets auth' first to authorize.`
     );
   }
 

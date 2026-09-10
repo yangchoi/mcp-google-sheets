@@ -23,7 +23,7 @@ export function explain(message: string, context: ErrorContext = "tool"): string
   return (
     `${message}\n\n` +
     `The stored refresh token is no longer valid. Re-authorize:\n` +
-    `  npx @yangchoi/mcp-google-sheets auth\n\n` +
+    `  npx @heyyang/mcp-google-sheets auth\n\n` +
     `If this happens roughly every 7 days, the OAuth app is still in "Testing" mode ` +
     `in Google Cloud Console, which expires refresh tokens on that schedule. ` +
     `Publishing the app stops it.`

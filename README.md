@@ -63,10 +63,10 @@ mkdir -p ~/.config/mcp-google-sheets
 cp /path/to/downloaded-credentials.json ~/.config/mcp-google-sheets/credentials.json
 
 # 2. Authorize (opens browser once)
-npx @yangchoi/mcp-google-sheets auth
+npx @heyyang/mcp-google-sheets auth
 
 # 3. Register with Claude
-claude mcp add --scope user google-sheets -- npx -y @yangchoi/mcp-google-sheets
+claude mcp add --scope user google-sheets -- npx -y @heyyang/mcp-google-sheets
 ```
 
 ## Setup
@@ -126,7 +126,7 @@ Nothing to install if you run it with `npx` — the commands below fetch the
 published package on demand. To pin a copy instead:
 
 ```bash
-npm install -g @yangchoi/mcp-google-sheets
+npm install -g @heyyang/mcp-google-sheets
 ```
 
 <details>
@@ -140,7 +140,7 @@ npm run build
 ```
 
 Then substitute `node /absolute/path/to/mcp-google-sheets/dist/index.js` for
-`npx -y @yangchoi/mcp-google-sheets` everywhere below, and `npm run auth` for
+`npx -y @heyyang/mcp-google-sheets` everywhere below, and `npm run auth` for
 the `auth` command.
 </details>
 
@@ -149,7 +149,7 @@ the `auth` command.
 Run the one-time OAuth flow. Your browser will open, you approve access to your own Sheets, and the resulting token is stored at `~/.config/mcp-google-sheets/token.json`.
 
 ```bash
-npx @yangchoi/mcp-google-sheets auth
+npx @heyyang/mcp-google-sheets auth
 ```
 
 You should see `Authorization complete. Token saved.` in the terminal. The token
@@ -170,7 +170,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
   "mcpServers": {
     "google-sheets": {
       "command": "npx",
-      "args": ["-y", "@yangchoi/mcp-google-sheets"]
+      "args": ["-y", "@heyyang/mcp-google-sheets"]
     }
   }
 }
@@ -183,7 +183,7 @@ Restart Claude Desktop. The Sheets tools will appear in the tool picker.
 Register the server with the CLI:
 
 ```bash
-claude mcp add --scope user google-sheets -- npx -y @yangchoi/mcp-google-sheets
+claude mcp add --scope user google-sheets -- npx -y @heyyang/mcp-google-sheets
 ```
 
 `--scope user` makes the server available in **every** project on your machine. Without it the server is added at *local* scope, which loads only in the directory you ran the command from — a common surprise when a scheduled job or a session started elsewhere suddenly has no sheet tools. Check what you got with:
@@ -203,7 +203,7 @@ days after consent, which is the most common reason a working setup stops
 working. This reports how much of that window is left:
 
 ```bash
-npx @yangchoi/mcp-google-sheets check-auth   # installed
+npx @heyyang/mcp-google-sheets check-auth   # installed
 npm run check-auth                           # from a clone
 ```
 
@@ -300,7 +300,7 @@ The project number in the error message is the same project as that `project_id`
 
 **`Error: access_denied`** during OAuth — your Google account is not listed as a test user on the OAuth consent screen. Go to [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent) → add your email under **Test users**.
 
-**`insufficient permission`** when calling a tool — the token was created with a smaller scope. Delete `token.json` and re-run `npx @yangchoi/mcp-google-sheets auth`.
+**`insufficient permission`** when calling a tool — the token was created with a smaller scope. Delete `token.json` and re-run `npx @heyyang/mcp-google-sheets auth`.
 
 **Tool doesn't appear in Claude** — confirm the path in your MCP config is absolute and points to `dist/index.js` (not `src/index.ts`). Ensure you ran `npm run build`.
 
@@ -308,12 +308,12 @@ The project number in the error message is the same project as that `project_id`
 
 ```bash
 claude mcp remove google-sheets
-claude mcp add --scope user google-sheets -- npx -y @yangchoi/mcp-google-sheets
+claude mcp add --scope user google-sheets -- npx -y @heyyang/mcp-google-sheets
 ```
 
 This matters most for unattended runs (cron, `launchd`, `claude -p`), where the working directory is often `/` rather than your project. Without the tools an agent may fall back to calling the Sheets API another way and report success without touching your sheet.
 
-**`No stored token` at server startup** — you skipped [step 5](#5-authorize). Run `npx @yangchoi/mcp-google-sheets auth`.
+**`No stored token` at server startup** — you skipped [step 5](#5-authorize). Run `npx @heyyang/mcp-google-sheets auth`.
 
 ## Development
 

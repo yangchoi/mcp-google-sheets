@@ -19,7 +19,7 @@ describe("explain", () => {
   test("blames the refresh token during a tool call", () => {
     const out = explain("invalid_grant", "tool");
     assert.match(out, /stored refresh token is no longer valid/);
-    assert.match(out, /npx @yangchoi\/mcp-google-sheets auth/);
+    assert.match(out, /npx @heyyang\/mcp-google-sheets auth/);
     assert.match(out, /Testing" mode/);
   });
 
