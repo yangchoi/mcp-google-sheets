@@ -24,6 +24,8 @@ A lightweight, production-ready **Model Context Protocol (MCP)** server that exp
   - [Claude Desktop](#claude-desktop)
   - [Claude Code](#claude-code)
 - [Available tools](#available-tools)
+  - [Cell values](#cell-values)
+  - [Parameters](#parameters)
 - [Usage examples](#usage-examples)
 - [Configuration](#configuration)
 - [Security](#security)
@@ -71,6 +73,10 @@ claude mcp add --scope user google-sheets -- npx -y @heyyang/mcp-google-sheets
 
 ## Setup
 
+**Prerequisites:** Node.js 18 or newer (`node --version`) and a Google account.
+Steps 1–3 are one-time Google Cloud setup; if you already have OAuth desktop
+credentials for the Sheets API, skip to [step 4](#4-install-the-server).
+
 ### 1. Create a Google Cloud project
 
 - Open [Google Cloud Console](https://console.cloud.google.com/).
@@ -106,6 +112,13 @@ Only the Sheets API is required — this server requests the `spreadsheets` scop
   - User type: **External** (unless you're on a Workspace with Internal available)
   - Add yourself as a **test user** while the app is in `Testing` mode
   - Scopes can be left empty at the consent screen; the app will request them at runtime
+
+> ⚠️ **While the app stays in `Testing` mode, Google expires the refresh token
+> seven days after consent** — you will have to reauthorize every week, and the
+> failure shows up as `invalid_grant` on a tool call. It is fine for trying this
+> out. To stop it, return to the consent screen and click **Publish app**; an
+> app requesting only your own data does not need verification for this. Check
+> where you stand at any time with [`check-auth`](#checking-the-token).
 - Back at Create OAuth client ID:
   - Application type: **Desktop app**
   - Name: anything (e.g., `mcp-google-sheets`)
@@ -246,7 +259,80 @@ MCP_TEST_SPREADSHEET_ID=<id> MCP_TEST_SHEET_NAME=Data npm test
 | `clear_range` | Clear values in a range without deleting formatting. |
 | `batch_update_values` | Update multiple ranges in a single API call. |
 
-All tools take `spreadsheetId` (found in the sheet URL between `/d/` and `/edit`).
+Every tool takes `spreadsheetId` — the id in the sheet URL between `/d/` and
+`/edit`. Ranges are [A1 notation](https://developers.google.com/sheets/api/guides/concepts#expandable-1):
+`Sheet1!A1:D10`, `Sheet1!A:F` for whole columns, or just `Sheet1` for the whole
+tab. A tab name containing spaces needs quoting: `'My Sheet'!A1`.
+
+### Cell values
+
+`values` is always a **2D array** — the outer array is rows, each inner array is
+the cells in that row. A single row still has to be wrapped: `[["a", "b"]]`.
+
+A cell may be a string, number, boolean, or `null`. **`null` leaves the existing
+cell untouched**, which is not the same as writing `""` (that clears it).
+
+### Parameters
+
+**`get_spreadsheet_metadata`**
+
+| Parameter | Required | Default | Notes |
+|---|---|---|---|
+| `spreadsheetId` | yes | — | Returns the title and every tab with its `sheetId`, `rowCount`, `columnCount`. |
+
+**`read_range`**
+
+| Parameter | Required | Default | Notes |
+|---|---|---|---|
+| `spreadsheetId` | yes | — | |
+| `range` | yes | — | A1 notation. |
+| `valueRenderOption` | no | `UNFORMATTED_VALUE` | `UNFORMATTED_VALUE` returns typed values — use it for anything numeric. `FORMATTED_VALUE` returns what the cell displays, as strings (`"1,234,567"`, `"$5.00"`). `FORMULA` returns the formula text instead of its result. |
+| `dateTimeRenderOption` | no | `FORMATTED_STRING` | Only applies with `UNFORMATTED_VALUE`. `FORMATTED_STRING` keeps dates readable; `SERIAL_NUMBER` returns the Sheets date serial for date arithmetic. |
+
+Returns `{ range, rowCount, values }`. Trailing empty rows and columns are
+omitted, so **rows can be ragged** — row 1 may have 6 entries while row 2 has 3.
+Do not assume a rectangle.
+
+> The API's own default is `FORMATTED_VALUE`, which turns every number into a
+> locale-formatted string. This server defaults to `UNFORMATTED_VALUE` instead so
+> that arithmetic on a read result is correct.
+
+**`update_range`**
+
+| Parameter | Required | Default | Notes |
+|---|---|---|---|
+| `spreadsheetId` | yes | — | |
+| `range` | yes | — | Cells outside the range are untouched. |
+| `values` | yes | — | 2D array. |
+| `valueInputOption` | no | `USER_ENTERED` | `USER_ENTERED` parses input like typing into the UI — `=A1*2` becomes a formula, `2026-09-10` becomes a date. `RAW` stores the value verbatim. |
+
+**`append_row`**
+
+| Parameter | Required | Default | Notes |
+|---|---|---|---|
+| `spreadsheetId` | yes | — | |
+| `range` | yes | — | A tab name (`Sheet1`) or a table range (`Sheet1!A:F`). The API finds the last row with data in it and appends after that. |
+| `values` | yes | — | 2D array; one inner array per row to append. |
+| `valueInputOption` | no | `USER_ENTERED` | As above. |
+| `insertDataOption` | no | `INSERT_ROWS` | `INSERT_ROWS` shifts existing rows down. `OVERWRITE` writes into existing rows below the table instead. |
+
+**`clear_range`**
+
+| Parameter | Required | Default | Notes |
+|---|---|---|---|
+| `spreadsheetId` | yes | — | |
+| `range` | yes | — | Clears values only. Formatting, data validation, and the cells themselves survive. |
+
+**`batch_update_values`**
+
+| Parameter | Required | Default | Notes |
+|---|---|---|---|
+| `spreadsheetId` | yes | — | |
+| `data` | yes | — | Array of `{ range, values }` objects, each writing its 2D array to that range. |
+| `valueInputOption` | no | `USER_ENTERED` | Applies to every range in the call. |
+
+One request instead of N, so prefer this over repeated `update_range` calls when
+writing to several disjoint ranges.
 
 ## Usage examples
 
@@ -302,7 +388,13 @@ The project number in the error message is the same project as that `project_id`
 
 **`insufficient permission`** when calling a tool — the token was created with a smaller scope. Delete `token.json` and re-run `npx @heyyang/mcp-google-sheets auth`.
 
-**Tool doesn't appear in Claude** — confirm the path in your MCP config is absolute and points to `dist/index.js` (not `src/index.ts`). Ensure you ran `npm run build`.
+**Tool doesn't appear in Claude** — restart the client after registering; the tool list is read at startup. Check the registration with `claude mcp get google-sheets`, and confirm the server starts on its own:
+
+```bash
+npx -y @heyyang/mcp-google-sheets --help
+```
+
+If you are running from a clone rather than the published package, the path in your MCP config must be absolute and point at `dist/index.js` (not `src/index.ts`), and you must have run `npm run build`.
 
 **Tools appear in one directory but not another** — the server was registered at *local* scope, which binds it to a single project path. Run `claude mcp get google-sheets`; if the scope is not `User config`, re-register it:
 
@@ -313,6 +405,16 @@ claude mcp add --scope user google-sheets -- npx -y @heyyang/mcp-google-sheets
 
 This matters most for unattended runs (cron, `launchd`, `claude -p`), where the working directory is often `/` rather than your project. Without the tools an agent may fall back to calling the Sheets API another way and report success without touching your sheet.
 
+**`invalid_grant`** on a tool call — the stored refresh token is dead. Reauthorize:
+
+```bash
+npx @heyyang/mcp-google-sheets auth
+```
+
+If it comes back roughly every seven days, the OAuth app is still in `Testing` mode (see [step 3](#3-create-oauth-20-credentials)). **Publish app** on the consent screen stops it.
+
+**`Port 47319 is already in use`** during `auth` — something else holds the OAuth callback port. Find it with `lsof -i :47319`, stop it, and run `auth` again.
+
 **`No stored token` at server startup** — you skipped [step 5](#5-authorize). Run `npx @heyyang/mcp-google-sheets auth`.
 
 ## Development
@@ -322,6 +424,7 @@ npm install
 npm run dev      # tsc --watch
 npm run build    # produces dist/
 npm run start    # runs dist/index.js on stdio
+npm test         # builds, then runs the suite (see Tests)
 ```
 
 Contributions welcome. This is a minimal core; PRs for structural updates (`spreadsheets.batchUpdate` for formatting, sheet-add, filters, protected ranges) are appreciated.

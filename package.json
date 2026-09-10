@@ -1,6 +1,6 @@
 {
   "name": "@heyyang/mcp-google-sheets",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A Model Context Protocol (MCP) server for Google Sheets \u2014 read, write, and manage spreadsheets from Claude Desktop, Claude Code, or any MCP-compatible AI client.",
   "keywords": [
     "mcp",
@@ -62,7 +62,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "access": "public"
